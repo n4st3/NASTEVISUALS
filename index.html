@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>NASTEVISUALS DJ MODE</title>
+<title>NASTEVISUALS LIVE</title>
 
 <style>
 body {
@@ -85,8 +85,8 @@ button:hover { background: rgba(255,255,255,0.25); }
 <canvas id="canvas"></canvas>
 
 <div id="panel">
-    <button id="uploadBtn">Upload</button>
-    <button id="playPause">Play</button>
+    <button id="micBtn">Use Mic</button>
+    <button id="playPause">Play / Pause</button>
 
     <div class="knob-container">
         <div class="knob" data-type="low"><div class="knob-indicator"></div></div>
@@ -100,17 +100,7 @@ button:hover { background: rgba(255,255,255,0.25); }
         <div class="knob" data-type="high"><div class="knob-indicator"></div></div>
         <label>Highs</label>
     </div>
-    <div class="knob-container">
-        <div class="knob" data-type="pitch"><div class="knob-indicator"></div></div>
-        <label>Pitch</label>
-    </div>
-    <div class="knob-container">
-        <div class="knob" data-type="reverb"><div class="knob-indicator"></div></div>
-        <label>Reverb</label>
-    </div>
 </div>
-
-<input type="file" id="fileInput" accept="audio/*" hidden>
 
 <script>
 const canvas = document.getElementById("canvas");
@@ -124,65 +114,34 @@ window.addEventListener("resize", resize);
 resize();
 
 /* ===== AUDIO ===== */
-let audioCtx, analyser, dataArray, audio, source;
+let audioCtx, analyser, dataArray, source;
 let isPlaying = false;
 
-let lowGain = 1, midGain = 1, highGain = 1;
-let pitch = 0, reverbValue = 0;
+let lowGain=1, midGain=1, highGain=1;
 
-let convolver;
-
-const fileInput = document.getElementById("fileInput");
-const uploadBtn = document.getElementById("uploadBtn");
+const micBtn = document.getElementById("micBtn");
 const playPause = document.getElementById("playPause");
 
-uploadBtn.onclick = () => fileInput.click();
-
-fileInput.addEventListener("change", async function() {
-    const file = this.files[0];
-    if (!file) return;
-    if (audio) audio.pause();
-
-    audio = new Audio(URL.createObjectURL(file));
-    audio.crossOrigin = "anonymous";
+micBtn.onclick = async () => {
+    if (audioCtx) return; // already started
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;
-
-    source = audioCtx.createMediaElementSource(audio);
-
-    // Reverb
-    convolver = audioCtx.createConvolver();
-    const irBuffer = audioCtx.createBuffer(2, audioCtx.sampleRate*2, audioCtx.sampleRate);
-    for (let channel=0; channel<irBuffer.numberOfChannels; channel++){
-        const nowBuffer = irBuffer.getChannelData(channel);
-        for (let i=0;i<irBuffer.length;i++){
-            nowBuffer[i] = (Math.random()*2-1)*0.2; // simple reverb
-        }
-    }
-    convolver.buffer = irBuffer;
-
-    source.connect(analyser);
-    analyser.connect(convolver);
-    convolver.connect(audioCtx.destination);
-
     dataArray = new Uint8Array(analyser.frequencyBinCount);
 
-    audio.play();
-    isPlaying = true;
-    playPause.textContent = "Pause";
-});
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        source = audioCtx.createMediaStreamSource(stream);
+        source.connect(analyser);
+        isPlaying = true;
+    } catch(e){
+        alert("Microphone access denied");
+    }
+};
 
 playPause.onclick = () => {
-    if (!audio) return;
-    if (isPlaying){
-        audio.pause();
-        playPause.textContent="Play";
-    } else{
-        audio.play();
-        playPause.textContent="Pause";
-    }
-    isPlaying = !isPlaying;
+    if (!audioCtx) return;
+    if (audioCtx.state === "suspended") audioCtx.resume();
 };
 
 /* ===== KNOBS ===== */
@@ -208,11 +167,6 @@ document.querySelectorAll(".knob").forEach(knob=>{
             case "low": lowGain=value; break;
             case "mid": midGain=value; break;
             case "high": highGain=value; break;
-            case "pitch": 
-                pitch = value*2-1; 
-                if(audio) audio.playbackRate = Math.pow(2, pitch); 
-                break;
-            case "reverb": reverbValue = value; break;
         }
     });
 });
@@ -291,20 +245,17 @@ function animate(timestamp){
     }
 
     const size=Math.min(canvas.width,canvas.height)/3;
-    // Center
     ctx.beginPath();
     ctx.arc(canvas.width/2, canvas.height/2, size,0,Math.PI*2);
     ctx.fillStyle="#6e6e6e";
     ctx.fill();
 
-    // Blobs
     drawBlob(size-20,55,3,"#c2ad8d",0.9,bass,1.2);
     drawBlob(size-80,40,6,"#b29c7c",0.85,mid,-0.8);
     drawBlob(size-140,30,10,"#d8cdbd",0.95,high,1.5);
 
     drawParticles(bass);
 
-    // Beat flash
     if(bass>0.6){
         ctx.fillStyle="rgba(255,255,255,"+(bass-0.5)+")";
         ctx.fillRect(0,0,canvas.width,canvas.height);
