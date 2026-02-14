@@ -1,3 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>NASTEVISUALS</title>
+
+<style>
+body {
+    margin: 0;
+    background: radial-gradient(circle at center, #111 0%, #000 70%);
+    font-family: Arial, sans-serif;
+    color: white;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+canvas {
+    flex: 1;
+    display: block;
+}
+
+#panel {
+    backdrop-filter: blur(20px);
+    background: rgba(255,255,255,0.08);
+    border-top: 1px solid rgba(255,255,255,0.15);
+    padding: 18px 20px;
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+button {
+    background: rgba(255,255,255,0.15);
+    border: none;
+    color: white;
+    padding: 8px 16px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.knob-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+}
+
+.knob {
+    width: 55px;
+    height: 55px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #555, #222);
+    position: relative;
+    cursor: pointer;
+}
+
+.knob-indicator {
+    width: 3px;
+    height: 18px;
+    background: #d8cdbd;
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform-origin: bottom center;
+    transform: translateX(-50%) rotate(0deg);
+    border-radius: 2px;
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div id="panel">
+    <button id="uploadBtn">Upload</button>
+    <button id="playPause">Play</button>
+    <button id="micBtn">Mic</button>
+
+    <div class="knob-container">
+        <div class="knob" data-type="pitch">
+            <div class="knob-indicator"></div>
+        </div>
+        <label>Pitch</label>
+    </div>
+
+    <div class="knob-container">
+        <div class="knob" data-type="reverb">
+            <div class="knob-indicator"></div>
+        </div>
+        <label>Reverb</label>
+    </div>
+</div>
+
+<input type="file" id="fileInput" accept="audio/*" hidden>
+
 <script>
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
@@ -16,31 +117,63 @@ let source;
 let audio;
 let convolver;
 let wetGain;
-let micStream;
-
 let isPlaying = false;
 
-let lowGain = 1;
-let midGain = 1;
-let highGain = 1;
 let pitchValue = 1;
 let reverbAmount = 0;
 
-const fileInput = document.getElementById("fileInput");
 const uploadBtn = document.getElementById("uploadBtn");
+const fileInput = document.getElementById("fileInput");
 const playPause = document.getElementById("playPause");
 const micBtn = document.getElementById("micBtn");
 
 uploadBtn.onclick = () => fileInput.click();
 
-fileInput.addEventListener("change", function() {
+function setupAudioContext() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+        convolver = audioCtx.createConvolver();
+        wetGain = audioCtx.createGain();
+        wetGain.gain.value = reverbAmount;
+
+        createReverbImpulse();
+    }
+}
+
+function createReverbImpulse() {
+    const length = audioCtx.sampleRate * 2;
+    const impulse = audioCtx.createBuffer(2, length, audioCtx.sampleRate);
+
+    for (let i = 0; i < 2; i++) {
+        const channel = impulse.getChannelData(i);
+        for (let j = 0; j < length; j++) {
+            channel[j] = (Math.random() * 2 - 1) * (1 - j / length);
+        }
+    }
+    convolver.buffer = impulse;
+}
+
+function connectSource(src) {
+    src.connect(analyser);
+    analyser.connect(audioCtx.destination);
+
+    src.connect(convolver);
+    convolver.connect(wetGain);
+    wetGain.connect(audioCtx.destination);
+}
+
+fileInput.addEventListener("change", async function() {
     const file = this.files[0];
     if (!file) return;
 
-    if (audio) audio.pause();
+    setupAudioContext();
+    await audioCtx.resume();
 
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    setupNodes();
+    if (audio) audio.pause();
 
     audio = new Audio(URL.createObjectURL(file));
     source = audioCtx.createMediaElementSource(audio);
@@ -52,8 +185,9 @@ fileInput.addEventListener("change", function() {
     playPause.textContent = "Pause";
 });
 
-playPause.onclick = () => {
+playPause.onclick = async () => {
     if (!audio) return;
+    await audioCtx.resume();
 
     if (isPlaying) {
         audio.pause();
@@ -67,62 +201,31 @@ playPause.onclick = () => {
 };
 
 micBtn.onclick = async () => {
-    if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        setupNodes();
+    try {
+        setupAudioContext();
+        await audioCtx.resume();
+
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+        const micSource = audioCtx.createMediaStreamSource(stream);
+        connectSource(micSource);
+
+        alert("Mic connected!");
+    } catch (err) {
+        alert("Mic failed. Make sure you're on HTTPS and allowed mic access.");
+        console.error(err);
     }
-
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const micSource = audioCtx.createMediaStreamSource(micStream);
-
-    connectSource(micSource);
 };
 
-function setupNodes() {
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 256;
-
-    convolver = audioCtx.createConvolver();
-    wetGain = audioCtx.createGain();
-    wetGain.gain.value = reverbAmount;
-
-    createReverbImpulse(audioCtx);
-
-    dataArray = new Uint8Array(analyser.frequencyBinCount);
-}
-
-function connectSource(src) {
-    src.connect(analyser);
-    analyser.connect(audioCtx.destination);
-
-    src.connect(convolver);
-    convolver.connect(wetGain);
-    wetGain.connect(audioCtx.destination);
-}
-
-function createReverbImpulse(ctx) {
-    const length = ctx.sampleRate * 2;
-    const impulse = ctx.createBuffer(2, length, ctx.sampleRate);
-
-    for (let i = 0; i < 2; i++) {
-        const channel = impulse.getChannelData(i);
-        for (let j = 0; j < length; j++) {
-            channel[j] = (Math.random() * 2 - 1) * (1 - j / length);
-        }
-    }
-    convolver.buffer = impulse;
-}
-
-/* KNOBS */
 document.querySelectorAll(".knob").forEach(knob => {
     const indicator = knob.querySelector(".knob-indicator");
-    let isDragging = false;
+    let dragging = false;
 
-    knob.addEventListener("mousedown", () => isDragging = true);
-    window.addEventListener("mouseup", () => isDragging = false);
+    knob.addEventListener("mousedown", () => dragging = true);
+    window.addEventListener("mouseup", () => dragging = false);
 
     window.addEventListener("mousemove", e => {
-        if (!isDragging) return;
+        if (!dragging) return;
 
         const rect = knob.getBoundingClientRect();
         const cx = rect.left + rect.width/2;
@@ -153,49 +256,49 @@ document.querySelectorAll(".knob").forEach(knob => {
 
 let time = 0;
 
-function drawBlob(baseRadius, waveSize, freq, color, alpha, intensity) {
+function drawBlob(radius, intensity) {
     const cx = canvas.width/2;
     const cy = canvas.height/2;
 
     ctx.beginPath();
-    for (let i=0; i<=360; i++) {
-        const angle = i * Math.PI/180;
-        const wave = Math.sin(angle*freq + time) * waveSize * intensity;
-        const r = baseRadius + wave;
+    for (let i=0;i<=360;i++){
+        const angle = i*Math.PI/180;
+        const wave = Math.sin(angle*6 + time)*60*intensity;
+        const r = radius + wave;
         const x = cx + r*Math.cos(angle);
         const y = cy + r*Math.sin(angle);
-        if (i===0) ctx.moveTo(x,y);
+        if(i===0) ctx.moveTo(x,y);
         else ctx.lineTo(x,y);
     }
     ctx.closePath();
-    ctx.fillStyle = color;
-    ctx.globalAlpha = alpha;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 60;
+    ctx.fillStyle="#d8cdbd";
+    ctx.shadowColor="#d8cdbd";
+    ctx.shadowBlur=60;
     ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.globalAlpha = 1;
+    ctx.shadowBlur=0;
 }
 
-function animate() {
+function animate(){
     requestAnimationFrame(animate);
     ctx.clearRect(0,0,canvas.width,canvas.height);
 
-    let bass=0.4;
+    let bass=0.3;
 
-    if (analyser) {
+    if(analyser){
         analyser.getByteFrequencyData(dataArray);
         let low=0;
-        for (let i=0;i<10;i++) low+=dataArray[i];
-        bass = (low/10)/255;
+        for(let i=0;i<10;i++) low+=dataArray[i];
+        bass=(low/10)/255;
     }
 
-    time += 0.03 + bass * 0.15;
+    time+=0.04 + bass*0.2;
 
-    const size = Math.min(canvas.width, canvas.height)/3;
-
-    drawBlob(size-40, 80, 4, "#c2ad8d", 0.9, bass);
+    const size=Math.min(canvas.width,canvas.height)/3;
+    drawBlob(size,bass);
 }
 
 animate();
 </script>
+
+</body>
+</html>
