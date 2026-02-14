@@ -1,138 +1,201 @@
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>NASTEVISUALS</title>
-
-<style>
-body {
-    margin: 0;
-    background: radial-gradient(circle at center, #111 0%, #000 70%);
-    font-family: Arial, sans-serif;
-    color: white;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding-top: 80px;
-}
-
-h1 {
-    letter-spacing: 5px;
-}
-
-.controls {
-    margin-top: 40px;
-    display: flex;
-    gap: 10px;
-}
-
-input[type="file"],
-input[type="text"] {
-    padding: 12px;
-    border-radius: 8px;
-    border: none;
-    width: 260px;
-    background: #1e1e1e;
-    color: white;
-}
-
-button {
-    padding: 12px 18px;
-    border-radius: 8px;
-    border: none;
-    cursor: pointer;
-    background: #ff3c00;
-    color: white;
-    font-weight: bold;
-}
-
-button:hover {
-    opacity: 0.8;
-}
-</style>
-</head>
-
-<body>
-
-<h1>NASTEVISUALS</h1>
-
-<div class="controls">
-    <!-- Desktop Upload -->
-    <input type="file" id="audioUpload" accept="audio/*">
-
-    <!-- SoundCloud URL -->
-    <input type="text" id="scUrl" placeholder="Paste SoundCloud URL">
-
-    <button onclick="loadSoundCloud()">Load</button>
-</div>
-
-<div class="controls">
-    <button onclick="playAudio()">Play</button>
-    <button onclick="pauseAudio()">Pause</button>
-</div>
-
-<!-- Hidden SoundCloud Player -->
-<iframe 
-  id="sc-player"
-  style="position:absolute; left:-9999px;"
-  width="0" 
-  height="0" 
-  frameborder="no"
-  allow="autoplay">
-</iframe>
-
-<audio id="localPlayer"></audio>
-
-<script src="https://w.soundcloud.com/player/api.js"></script>
-
 <script>
-let localPlayer = document.getElementById("localPlayer");
-let scIframe = document.getElementById("sc-player");
-let widget = null;
-let usingSoundCloud = false;
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
 
-// Desktop file upload
-document.getElementById("audioUpload").addEventListener("change", function(e) {
-    const file = e.target.files[0];
-    if (file) {
-        usingSoundCloud = false;
-        localPlayer.src = URL.createObjectURL(file);
-    }
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = canvas.offsetHeight;
+}
+window.addEventListener("resize", resize);
+resize();
+
+let audioCtx;
+let analyser;
+let dataArray;
+let source;
+let audio;
+let convolver;
+let wetGain;
+let micStream;
+
+let isPlaying = false;
+
+let lowGain = 1;
+let midGain = 1;
+let highGain = 1;
+let pitchValue = 1;
+let reverbAmount = 0;
+
+const fileInput = document.getElementById("fileInput");
+const uploadBtn = document.getElementById("uploadBtn");
+const playPause = document.getElementById("playPause");
+const micBtn = document.getElementById("micBtn");
+
+uploadBtn.onclick = () => fileInput.click();
+
+fileInput.addEventListener("change", function() {
+    const file = this.files[0];
+    if (!file) return;
+
+    if (audio) audio.pause();
+
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    setupNodes();
+
+    audio = new Audio(URL.createObjectURL(file));
+    source = audioCtx.createMediaElementSource(audio);
+
+    connectSource(source);
+
+    audio.play();
+    isPlaying = true;
+    playPause.textContent = "Pause";
 });
 
-// Load SoundCloud track
-function loadSoundCloud() {
-    const url = document.getElementById("scUrl").value;
-    if (!url) return;
+playPause.onclick = () => {
+    if (!audio) return;
 
-    usingSoundCloud = true;
-
-    scIframe.src = 
-      "https://w.soundcloud.com/player/?url=" + 
-      encodeURIComponent(url) + 
-      "&auto_play=false&visual=false&show_artwork=false";
-
-    widget = SC.Widget(scIframe);
-}
-
-// Play
-function playAudio() {
-    if (usingSoundCloud && widget) {
-        widget.play();
+    if (isPlaying) {
+        audio.pause();
+        playPause.textContent = "Play";
     } else {
-        localPlayer.play();
+        audio.play();
+        playPause.textContent = "Pause";
     }
+
+    isPlaying = !isPlaying;
+};
+
+micBtn.onclick = async () => {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        setupNodes();
+    }
+
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const micSource = audioCtx.createMediaStreamSource(micStream);
+
+    connectSource(micSource);
+};
+
+function setupNodes() {
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+
+    convolver = audioCtx.createConvolver();
+    wetGain = audioCtx.createGain();
+    wetGain.gain.value = reverbAmount;
+
+    createReverbImpulse(audioCtx);
+
+    dataArray = new Uint8Array(analyser.frequencyBinCount);
 }
 
-// Pause
-function pauseAudio() {
-    if (usingSoundCloud && widget) {
-        widget.pause();
-    } else {
-        localPlayer.pause();
-    }
+function connectSource(src) {
+    src.connect(analyser);
+    analyser.connect(audioCtx.destination);
+
+    src.connect(convolver);
+    convolver.connect(wetGain);
+    wetGain.connect(audioCtx.destination);
 }
+
+function createReverbImpulse(ctx) {
+    const length = ctx.sampleRate * 2;
+    const impulse = ctx.createBuffer(2, length, ctx.sampleRate);
+
+    for (let i = 0; i < 2; i++) {
+        const channel = impulse.getChannelData(i);
+        for (let j = 0; j < length; j++) {
+            channel[j] = (Math.random() * 2 - 1) * (1 - j / length);
+        }
+    }
+    convolver.buffer = impulse;
+}
+
+/* KNOBS */
+document.querySelectorAll(".knob").forEach(knob => {
+    const indicator = knob.querySelector(".knob-indicator");
+    let isDragging = false;
+
+    knob.addEventListener("mousedown", () => isDragging = true);
+    window.addEventListener("mouseup", () => isDragging = false);
+
+    window.addEventListener("mousemove", e => {
+        if (!isDragging) return;
+
+        const rect = knob.getBoundingClientRect();
+        const cx = rect.left + rect.width/2;
+        const cy = rect.top + rect.height/2;
+
+        const angle = Math.atan2(e.clientY - cy, e.clientX - cx);
+        let deg = angle * (180 / Math.PI) + 90;
+
+        if (deg < -135) deg = -135;
+        if (deg > 135) deg = 135;
+
+        indicator.style.transform =
+            `translateX(-50%) rotate(${deg}deg)`;
+
+        const value = (deg + 135) / 270;
+
+        if (knob.dataset.type === "pitch") {
+            pitchValue = 0.5 + value * 1.5;
+            if (audio) audio.playbackRate = pitchValue;
+        }
+
+        if (knob.dataset.type === "reverb") {
+            reverbAmount = value;
+            if (wetGain) wetGain.gain.value = reverbAmount;
+        }
+    });
+});
+
+let time = 0;
+
+function drawBlob(baseRadius, waveSize, freq, color, alpha, intensity) {
+    const cx = canvas.width/2;
+    const cy = canvas.height/2;
+
+    ctx.beginPath();
+    for (let i=0; i<=360; i++) {
+        const angle = i * Math.PI/180;
+        const wave = Math.sin(angle*freq + time) * waveSize * intensity;
+        const r = baseRadius + wave;
+        const x = cx + r*Math.cos(angle);
+        const y = cy + r*Math.sin(angle);
+        if (i===0) ctx.moveTo(x,y);
+        else ctx.lineTo(x,y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 60;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    let bass=0.4;
+
+    if (analyser) {
+        analyser.getByteFrequencyData(dataArray);
+        let low=0;
+        for (let i=0;i<10;i++) low+=dataArray[i];
+        bass = (low/10)/255;
+    }
+
+    time += 0.03 + bass * 0.15;
+
+    const size = Math.min(canvas.width, canvas.height)/3;
+
+    drawBlob(size-40, 80, 4, "#c2ad8d", 0.9, bass);
+}
+
+animate();
 </script>
-
-</body>
-</html>
