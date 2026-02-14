@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>NASTEVISUALS</title>
+<title>NASTEVISUALS DJ MODE</title>
 
 <style>
 body {
@@ -25,11 +25,12 @@ canvas {
     backdrop-filter: blur(20px);
     background: rgba(255,255,255,0.08);
     border-top: 1px solid rgba(255,255,255,0.15);
-    padding: 18px 30px;
+    padding: 18px 20px;
     display: flex;
-    gap: 30px;
+    gap: 20px;
     align-items: center;
     justify-content: center;
+    flex-wrap: wrap;
     box-shadow: 0 -10px 40px rgba(0,0,0,0.5);
 }
 
@@ -88,24 +89,24 @@ button:hover { background: rgba(255,255,255,0.25); }
     <button id="playPause">Play</button>
 
     <div class="knob-container">
-        <div class="knob" data-type="low">
-            <div class="knob-indicator"></div>
-        </div>
+        <div class="knob" data-type="low"><div class="knob-indicator"></div></div>
         <label>Lows</label>
     </div>
-
     <div class="knob-container">
-        <div class="knob" data-type="mid">
-            <div class="knob-indicator"></div>
-        </div>
+        <div class="knob" data-type="mid"><div class="knob-indicator"></div></div>
         <label>Mids</label>
     </div>
-
     <div class="knob-container">
-        <div class="knob" data-type="high">
-            <div class="knob-indicator"></div>
-        </div>
+        <div class="knob" data-type="high"><div class="knob-indicator"></div></div>
         <label>Highs</label>
+    </div>
+    <div class="knob-container">
+        <div class="knob" data-type="pitch"><div class="knob-indicator"></div></div>
+        <label>Pitch</label>
+    </div>
+    <div class="knob-container">
+        <div class="knob" data-type="reverb"><div class="knob-indicator"></div></div>
+        <label>Reverb</label>
     </div>
 </div>
 
@@ -122,15 +123,14 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
+/* ===== AUDIO ===== */
 let audioCtx, analyser, dataArray, audio, source;
 let isPlaying = false;
 
-let lowGain = 1;
-let midGain = 1;
-let highGain = 1;
+let lowGain = 1, midGain = 1, highGain = 1;
+let pitch = 0, reverbValue = 0;
 
-let time = 0;
-let lastTime = 0;
+let convolver;
 
 const fileInput = document.getElementById("fileInput");
 const uploadBtn = document.getElementById("uploadBtn");
@@ -138,20 +138,33 @@ const playPause = document.getElementById("playPause");
 
 uploadBtn.onclick = () => fileInput.click();
 
-fileInput.addEventListener("change", function() {
+fileInput.addEventListener("change", async function() {
     const file = this.files[0];
     if (!file) return;
-
     if (audio) audio.pause();
 
     audio = new Audio(URL.createObjectURL(file));
+    audio.crossOrigin = "anonymous";
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;
 
     source = audioCtx.createMediaElementSource(audio);
+
+    // Reverb
+    convolver = audioCtx.createConvolver();
+    const irBuffer = audioCtx.createBuffer(2, audioCtx.sampleRate*2, audioCtx.sampleRate);
+    for (let channel=0; channel<irBuffer.numberOfChannels; channel++){
+        const nowBuffer = irBuffer.getChannelData(channel);
+        for (let i=0;i<irBuffer.length;i++){
+            nowBuffer[i] = (Math.random()*2-1)*0.2; // simple reverb
+        }
+    }
+    convolver.buffer = irBuffer;
+
     source.connect(analyser);
-    analyser.connect(audioCtx.destination);
+    analyser.connect(convolver);
+    convolver.connect(audioCtx.destination);
 
     dataArray = new Uint8Array(analyser.frequencyBinCount);
 
@@ -162,75 +175,71 @@ fileInput.addEventListener("change", function() {
 
 playPause.onclick = () => {
     if (!audio) return;
-    if (isPlaying) {
+    if (isPlaying){
         audio.pause();
-        playPause.textContent = "Play";
-    } else {
+        playPause.textContent="Play";
+    } else{
         audio.play();
-        playPause.textContent = "Pause";
+        playPause.textContent="Pause";
     }
     isPlaying = !isPlaying;
 };
 
 /* ===== KNOBS ===== */
-document.querySelectorAll(".knob").forEach(knob => {
+document.querySelectorAll(".knob").forEach(knob=>{
     const indicator = knob.querySelector(".knob-indicator");
-    let dragging = false;
+    let dragging=false;
 
-    knob.addEventListener("mousedown", () => dragging = true);
-    window.addEventListener("mouseup", () => dragging = false);
+    knob.addEventListener("mousedown",()=>dragging=true);
+    window.addEventListener("mouseup",()=>dragging=false);
 
-    window.addEventListener("mousemove", e => {
-        if (!dragging) return;
-
+    window.addEventListener("mousemove", e=>{
+        if(!dragging) return;
         const rect = knob.getBoundingClientRect();
         const cx = rect.left + rect.width/2;
         const cy = rect.top + rect.height/2;
-
-        const angle = Math.atan2(e.clientY - cy, e.clientX - cx);
-        let deg = angle * (180 / Math.PI) + 90;
+        const angle = Math.atan2(e.clientY-cy, e.clientX-cx);
+        let deg = angle*(180/Math.PI)+90;
         deg = Math.max(-135, Math.min(135, deg));
+        indicator.style.transform=`translateX(-50%) rotate(${deg}deg)`;
+        const value = (deg+135)/270*3;
 
-        indicator.style.transform =
-            `translateX(-50%) rotate(${deg}deg)`;
-
-        const value = (deg + 135) / 270 * 3;
-
-        if (knob.dataset.type === "low") lowGain = value;
-        if (knob.dataset.type === "mid") midGain = value;
-        if (knob.dataset.type === "high") highGain = value;
+        switch(knob.dataset.type){
+            case "low": lowGain=value; break;
+            case "mid": midGain=value; break;
+            case "high": highGain=value; break;
+            case "pitch": 
+                pitch = value*2-1; 
+                if(audio) audio.playbackRate = Math.pow(2, pitch); 
+                break;
+            case "reverb": reverbValue = value; break;
+        }
     });
 });
 
-/* ===== PARTICLES ===== */
+/* ===== PARTICLES & BLOBS ===== */
 let particles = [];
-for (let i=0;i<150;i++){
-    particles.push({
-        angle: Math.random()*Math.PI*2,
-        radius: Math.random()*250 + 50,
-        speed: Math.random()*0.5 + 0.2
-    });
+for(let i=0;i<150;i++){
+    particles.push({angle:Math.random()*Math.PI*2, radius:Math.random()*250+50, speed:Math.random()*0.5+0.2});
 }
 
-/* ===== DRAW FUNCTIONS ===== */
-function drawBlob(radius, waveSize, freq, color, alpha, intensity, rotationSpeed){
-    const cx = canvas.width/2;
-    const cy = canvas.height/2;
+let time=0, lastTime=0;
 
+function drawBlob(radius,waveSize,freq,color,alpha,intensity,rotationSpeed){
+    const cx=canvas.width/2, cy=canvas.height/2;
     ctx.save();
-    ctx.translate(cx, cy);
+    ctx.translate(cx,cy);
     ctx.rotate(time*rotationSpeed);
-    ctx.translate(-cx, -cy);
+    ctx.translate(-cx,-cy);
 
     ctx.beginPath();
-    for (let i=0;i<=360;i++){
-        const angle = i*Math.PI/180;
-        const wave = Math.sin(angle*freq + time*2) * waveSize * intensity;
-        const r = radius + wave;
-        const x = cx + r*Math.cos(angle);
-        const y = cy + r*Math.sin(angle);
-        if(i===0) ctx.moveTo(x,y);
-        else ctx.lineTo(x,y);
+    for(let i=0;i<=360;i++){
+        const angle=i*Math.PI/180;
+        const wave=Math.sin(angle*freq+time*2)*waveSize*intensity;
+        const r=radius+wave;
+        const x=cx+r*Math.cos(angle);
+        const y=cy+r*Math.sin(angle);
+        if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
     }
     ctx.closePath();
     ctx.fillStyle=color;
@@ -243,13 +252,12 @@ function drawBlob(radius, waveSize, freq, color, alpha, intensity, rotationSpeed
 }
 
 function drawParticles(bass){
-    const cx = canvas.width/2;
-    const cy = canvas.height/2;
+    const cx=canvas.width/2, cy=canvas.height/2;
     particles.forEach(p=>{
-        p.angle += p.speed*0.01;
-        const r = p.radius + bass*100;
-        const x = cx + Math.cos(p.angle)*r;
-        const y = cy + Math.sin(p.angle)*r;
+        p.angle+=p.speed*0.01;
+        const r=p.radius+bass*100;
+        const x=cx+Math.cos(p.angle)*r;
+        const y=cy+Math.sin(p.angle)*r;
         ctx.beginPath();
         ctx.arc(x,y,3,0,Math.PI*2);
         ctx.fillStyle="#fff";
@@ -262,44 +270,46 @@ function drawParticles(bass){
 /* ===== ANIMATE ===== */
 function animate(timestamp){
     requestAnimationFrame(animate);
-    const delta = (timestamp - lastTime)/1000;
-    lastTime = timestamp;
-    time += delta*1.2;
+    const delta=(timestamp-lastTime)/1000;
+    lastTime=timestamp;
+    time+=delta*1.5;
 
     ctx.clearRect(0,0,canvas.width,canvas.height);
 
     let bass=0.2, mid=0.15, high=0.1;
-
     if(analyser){
         analyser.getByteFrequencyData(dataArray);
         let low=0, midSum=0, highSum=0;
-
         for(let i=0;i<dataArray.length;i++){
             if(i<20) low+=dataArray[i];
             else if(i<100) midSum+=dataArray[i];
             else highSum+=dataArray[i];
         }
-
-        bass = (low/20)/255 * lowGain;
-        mid = (midSum/80)/255 * midGain;
-        high = (highSum/(dataArray.length-100))/255 * highGain;
+        bass=(low/20)/255*lowGain;
+        mid=(midSum/80)/255*midGain;
+        high=(highSum/(dataArray.length-100))/255*highGain;
     }
 
-    const size = Math.min(canvas.width, canvas.height)/3;
-
-    // center disk
+    const size=Math.min(canvas.width,canvas.height)/3;
+    // Center
     ctx.beginPath();
-    ctx.arc(canvas.width/2, canvas.height/2, size, 0, Math.PI*2);
+    ctx.arc(canvas.width/2, canvas.height/2, size,0,Math.PI*2);
     ctx.fillStyle="#6e6e6e";
     ctx.fill();
 
-    drawBlob(size-20, 55, 3, "#c2ad8d",0.9,bass,1.2);
-    drawBlob(size-80, 40, 6, "#b29c7c",0.85,mid,-0.8);
-    drawBlob(size-140, 30, 10, "#d8cdbd",0.95,high,1.5);
+    // Blobs
+    drawBlob(size-20,55,3,"#c2ad8d",0.9,bass,1.2);
+    drawBlob(size-80,40,6,"#b29c7c",0.85,mid,-0.8);
+    drawBlob(size-140,30,10,"#d8cdbd",0.95,high,1.5);
 
     drawParticles(bass);
-}
 
+    // Beat flash
+    if(bass>0.6){
+        ctx.fillStyle="rgba(255,255,255,"+(bass-0.5)+")";
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+    }
+}
 animate();
 </script>
 </body>
