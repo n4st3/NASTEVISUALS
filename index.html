@@ -85,6 +85,7 @@ button:hover { background: rgba(255,255,255,0.25); }
 <canvas id="canvas"></canvas>
 
 <div id="panel">
+    <button id="uploadBtn">Upload Song</button>
     <button id="micBtn">Use Mic</button>
     <button id="playPause">Play / Pause</button>
 
@@ -102,6 +103,8 @@ button:hover { background: rgba(255,255,255,0.25); }
     </div>
 </div>
 
+<input type="file" id="fileInput" accept="audio/*" hidden>
+
 <script>
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
@@ -115,22 +118,51 @@ resize();
 
 /* ===== AUDIO ===== */
 let audioCtx, analyser, dataArray, source;
+let audioElement;
 let isPlaying = false;
-
 let lowGain=1, midGain=1, highGain=1;
 
+const fileInput = document.getElementById("fileInput");
+const uploadBtn = document.getElementById("uploadBtn");
 const micBtn = document.getElementById("micBtn");
 const playPause = document.getElementById("playPause");
 
-micBtn.onclick = async () => {
-    if (audioCtx) return; // already started
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+// Upload song
+uploadBtn.onclick = () => fileInput.click();
+fileInput.addEventListener("change", function() {
+    const file = this.files[0];
+    if (!file) return;
+
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (source) source.disconnect();
+    if (audioElement) audioElement.pause();
+
+    audioElement = new Audio(URL.createObjectURL(file));
+    audioElement.loop = true;
+
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;
     dataArray = new Uint8Array(analyser.frequencyBinCount);
 
+    source = audioCtx.createMediaElementSource(audioElement);
+    source.connect(analyser);
+    analyser.connect(audioCtx.destination);
+
+    audioElement.play();
+    isPlaying = true;
+});
+
+// Mic input
+micBtn.onclick = async () => {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (source) source.disconnect();
+
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 1024;
+        dataArray = new Uint8Array(analyser.frequencyBinCount);
+
         source = audioCtx.createMediaStreamSource(stream);
         source.connect(analyser);
         isPlaying = true;
@@ -142,6 +174,10 @@ micBtn.onclick = async () => {
 playPause.onclick = () => {
     if (!audioCtx) return;
     if (audioCtx.state === "suspended") audioCtx.resume();
+    if (audioElement) {
+        if (audioElement.paused) audioElement.play();
+        else audioElement.pause();
+    }
 };
 
 /* ===== KNOBS ===== */
